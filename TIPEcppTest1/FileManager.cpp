@@ -77,11 +77,11 @@ float** FileManager::read_standardized_csv_trucks(vector<vector<string>> lines, 
 	return Distance;
 }
 
-vector<float> FileManager::read_standardized_csv_drones(vector<vector<string>> lines, bool useTime, bool EnableCout)
+float* FileManager::read_standardized_csv_drones(vector<vector<string>> lines, bool useTime, bool EnableCout)
 {
 	//We define our dynamic matrix here
 	int row_colCount = int(sqrt(lines.size() - 1));
-	vector<float> Distance = vector<float>(row_colCount);
+	float* Distance = new float[row_colCount];
 
 	//We ignore the first line
 	for (int p = 1; p < lines.size(); p++)
@@ -90,7 +90,7 @@ vector<float> FileManager::read_standardized_csv_drones(vector<vector<string>> l
 		Distance[i] = std::stof(lines[p][(useTime ? 6 : 7)]);
 		if (EnableCout)
 		{
-			cout << "i: " << i << " j: " << j << " dist: " << Distance[i] << endl;
+			cout << "i: " << i << " dist: " << Distance[i] << endl;
 		}
 	}
 	return Distance;

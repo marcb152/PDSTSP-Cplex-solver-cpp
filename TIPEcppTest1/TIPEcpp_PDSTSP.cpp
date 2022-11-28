@@ -7,13 +7,18 @@
 #include <fstream>
 #include <vector>
 #include <map>
+#include <tuple>
 #include "utilities.h"
 #include "FileManager.h"
+#include <set>
 using namespace std;
 
 //Here we define a Matrix decision variable
 //IloNumVarArray is an 1-dimentionnal decision variable
 typedef IloArray<IloNumVarArray> NumVar2D;
+
+typedef tuple<int, int> Arc;
+typedef vector<Arc> TupleList;
 
 bool ContainsValue(map<int, bool> dict, bool Value)
 {
@@ -259,10 +264,22 @@ int main(int argc, char** argv)
 	cout << "n: " << n << endl;
 	//Distances matrix, from 1..n
 	float** Distance = new float* [n];
-	vector<float> Drone_dist = vector<float>(n);
+	float* Drone_dist = new float[n];
+	// TODO: Make a better management for the Nd float*
+	// Clients eligible for drone delivery
+	static const size_t Nd_size = 4;
+	std::set<float> Nd = { 1, 3, 7, 8 };
+	// M = number of drones
+	static const size_t M = 1;
 	Distance = FileManager::read_standardized_csv_trucks(func_out, useTime);
 	Drone_dist = FileManager::read_standardized_csv_drones(func_out_2, useTime, true);
-	
+
+	std::cout << "[";
+	for (int i = 0; i < n; i++)
+	{
+		std::cout << ",i: " << i << "|" << Drone_dist[i];
+	}
+	std::cout << "]" << std::endl;
 	/*vector<int> arg;
 	for (int i = 0; i < n; i++)
 	{
@@ -281,67 +298,168 @@ int main(int argc, char** argv)
 	//Our mathematical model is defined here
 	IloModel Model(env);
 
+	// We define our arcs
+	TupleList Arcs;
+	for (size_t i = 0; i <= n; i++)
+	{
+		for (size_t j = 0; j <= n; j++)
+		{
+			if (i != j)
+			{
+				Arcs.push_back(Arc(i, j));
+			}
+		}
+	}
+
 #pragma region DecisionVar
 
-	//Our decision variable X[][] -> A Matrix
-	//		   env, numberOfRows
-	NumVar2D Y(env, n);
+	// z[i] client i livré par un: véhicule = 1 || drone = 0
+	IloNumVarArray Z(env, n, 0, IloInfinity, ILOBOOL);
 
-	for (int i = 0; i < n; i++)
+	// x[arc] chemin (i, j) utilisé par un véhicule = 1 sinon 0
+	NumVar2D X(env, n + 1);
+
+	for (int i = 0; i <= n; i++)
 	{
-		Y[i] = IloNumVarArray(env, n, 0, IloInfinity, ILOBOOL);
+		X[i] = IloNumVarArray(env, n + 1, 0, IloInfinity, ILOBOOL);
 	}
+
+	//Our decision variable Y[][] -> A Matrix
+	//		   env, numberOfRows
+	// y[i][m] client i livré par le drone m
+	NumVar2D Y(env, M);
+
+	for (int i = 1; i <= M; i++)
+	{
+		Y[i] = IloNumVarArray(env, Nd_size, 0, IloInfinity, ILOBOOL);
+	}
+
+	// T: temps total
+	IloNumVar T(env, 0, IloInfinity, ILOFLOAT);
 
 #pragma endregion
 
 #pragma region ObjectiveFunction
 
-	IloExpr expr0(env);
+	Model.add(IloMinimize(env, T));
 
-	for (int i = 0; i < n; i++)
-	{
-		for (int j = 0; j < n; j++)
-		{
-			expr0 += Distance[i][j] * Y[i][j];
-		}
-	}
-
-	Model.add(IloMinimize(env, expr0));
+	// TODO: What is this useful for?
 	IloRange range();
+
 #pragma endregion
 
 #pragma region Constraints
-	//i != j
-	for (int i = 0; i < n; i++)
+	// ct 3.7
+	IloExpr expr3_7(env);
+	// Sum on each arc a in Arcs of t[i][j] * x[i][j]
+	for (Arc a : Arcs)
 	{
-		//X[i][i] == 0;
-		IloExpr expr1(env);
-		expr1 = Y[i][i];
-		Model.add(expr1 == 0);
+		int i, j;
+		std::tie(i, j) = a;
+		expr3_7 += Distance[i][j] * X[i][j];
+	}
+	// T >= sum
+	Model.add(T >= expr3_7);
+
+	// ct 3.8
+	// For each drone m
+	for (size_t m = 1; m <= M; m++)
+	{
+		IloExpr expr3_8(env);
+		// Sum on each i in Nd of t~[i] * y[i][m]
+		for (size_t i : Nd)
+		{
+			expr3_8 += Drone_dist[i] * Y[i][m];
+		}
+		Model.add(T >= expr3_8);
 	}
 
-	//Go-to constraints
-	for (int i = 0; i < n; i++)
+	// ct 3.9
+	// For each i in N
+	for (size_t i = 1; i <= n; i++)
 	{
-		//ct3_2
-		IloExpr expr3_2(env);
-		for (int j = 0; j < n; j++)
+		// If i not in Nd
+		if (std::find(Nd.begin(), Nd.end(), i) == Nd.end())
 		{
-			expr3_2 += Y[i][j];
+			// z[i] == 1
+			Model.add(Z[i] == 1);
 		}
-		Model.add(expr3_2 == 1);
 	}
 
-	//Come-from constraints
-	for (int j = 0; j < n; j++)
+	// ct 3.10
+	// For each i in N
+	for (size_t i = 1; i <= n; i++)
 	{
-		//ct3_3
-		IloExpr expr3_3(env);
-		for (int i = 0; i < n; i++)
+		IloExpr expr3_10(env);
+		// Sum on each arc a in A
+		for (Arc a : Arcs)
 		{
-			expr3_3 += Y[i][j];
+			int j;
+			int temp;
+			std::tie(temp, j) = a;
+			if (temp == i)
+			{
+				expr3_10 += X[i][j];
+			}
 		}
-		Model.add(expr3_3 == 1);
+		// Strange stuff with the same variable named i
+		Model.add(expr3_10 == Z[i]);
+	}
+
+	// ct 3.11
+	// For each i in Nd
+	for (size_t i : Nd)
+	{
+		IloExpr expr3_11(env);
+		// Sum on each 1 <= m <= M
+		for (int m = 1; m <= M; m++)
+		{
+			expr3_11 += Y[i][m];
+		}
+		Model.add(expr3_11 == 1 - Z[i]);
+	}
+
+	// ct 3.12
+	// Sum on each Arc(0, j) in A
+	IloExpr expr3_12(env);
+	for (Arc a : Arcs)
+	{
+		int i, j;
+		std::tie(i, j) = a;
+		if (i == 0)
+		{
+			expr3_12 += X[0][j];
+		}
+	}
+	Model.add(expr3_12 <= 1);
+
+	// ct 3.13
+	// For each i in 0..n == N U {0}
+	for (size_t i = 0; i <= n; i++)
+	{
+		IloExpr expr3_13_a(env);
+		// Sum on each Arc(i, j) in A
+		for (Arc a : Arcs)
+		{
+			int temp, j;
+			std::tie(temp, j) = a;
+			if (i == temp)
+			{
+				expr3_13_a += X[i][j];
+			}
+		}
+		IloExpr expr3_13_b(env);
+		// Sum on each Arc(k, i) in A
+		for (Arc a : Arcs)
+		{
+			int k, temp;
+			std::tie(k, temp) = a;
+			if (i == temp)
+			{
+				expr3_13_a += X[k][i];
+			}
+		}
+		Model.add(expr3_13_a == expr3_13_b);
 	}
 
 	//SECs
@@ -362,17 +480,41 @@ int main(int argc, char** argv)
 		}
 	}*/
 
-	//Contrainte d'intégralité sur X[i][j]
-	for (int i = 0; i < n; i++)
+	/* =========
+	INTEGRALITY CONSTRAINTS
+	======== */
+
+	// ct 3.15
+	// For each i in N
+	for (size_t i = 1; i <= n; i++)
 	{
-		for (int j = 0; j < n; j++)
+		Model.add(Z[i] == 0 || Z[i] == 1);
+	}
+
+	// ct 3.16
+	// For each Arc(i, j) in A
+	for (Arc a : Arcs)
+	{
+		int i, j;
+		std::tie(i, j) = a;
+		Model.add(X[i][j] == 0 || X[i][j] == 1);
+	}
+
+	// ct 3.17
+	// For each i in Nd
+	for (int i : Nd)
+	{
+		// For each 1 <= m <= M
+		for (int m = 1; m <= M; m++)
 		{
-			//ct 3_5
-			IloExpr expr3_5(env);
-			expr3_5 = Y[i][j];
-			Model.add(expr3_5 == 0 || expr3_5 == 1);
+			Model.add(Y[i][m] == 0 || Y[i][m] == 1);
 		}
 	}
+
+	// ct 3.18
+	// T positive or null
+	Model.add(T >= 0);
+
 #pragma endregion
 
 #pragma region Solving

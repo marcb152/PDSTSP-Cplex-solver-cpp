@@ -30,5 +30,5 @@ public:
 	/// <param name="lines">The csv files, already organized</param>
 	/// <param name="EnableCout">Enable debug output to console</param>
 	/// <returns>A list containing the data of the csv</returns>
-	static vector<float> read_standardized_csv_drones(vector<vector<string>> lines, bool useTime, bool EnableCout = false);
+	static float* read_standardized_csv_drones(vector<vector<string>> lines, bool useTime, bool EnableCout = false);
 };
