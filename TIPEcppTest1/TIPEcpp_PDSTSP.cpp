@@ -17,7 +17,7 @@ using namespace std;
 //IloNumVarArray is an 1-dimentionnal decision variable
 typedef IloArray<IloNumVarArray> NumVar2D;
 
-typedef tuple<int, int> Arc;
+typedef tuple<size_t, size_t> Arc;
 typedef vector<Arc> TupleList;
 
 bool ContainsValue(map<int, bool> dict, bool Value)
@@ -260,7 +260,7 @@ int main(int argc, char** argv)
 	auto func_out = FileManager::read_file(truck_filename);
 	auto func_out_2 = FileManager::read_file(drone_filename);
 	//Stops
-	const int n = sqrt(func_out.size() - 1);
+	const int n = sqrt(func_out.size() - 1) - 1;
 	cout << "n: " << n << endl;
 	//Distances matrix, from 1..n
 	float** Distance = new float* [n];
@@ -270,23 +270,21 @@ int main(int argc, char** argv)
 	static const size_t Nd_size = 4;
 	std::set<float> Nd = { 1, 3, 7, 8 };
 	// M = number of drones
-	static const size_t M = 1;
-	Distance = FileManager::read_standardized_csv_trucks(func_out, useTime);
+	static const size_t M = 2;
+	Distance = FileManager::read_standardized_csv_trucks(func_out, useTime, true);
 	Drone_dist = FileManager::read_standardized_csv_drones(func_out_2, useTime, true);
 
+	// Subtours generation
+	vector<int> arg;
 	std::cout << "[";
-	for (int i = 0; i < n; i++)
-	{
-		std::cout << ",i: " << i << "|" << Drone_dist[i];
-	}
-	std::cout << "]" << std::endl;
-	/*vector<int> arg;
-	for (int i = 0; i < n; i++)
+	for (int i = 1; i <= n; i++)
 	{
 		arg.push_back(i);
+		std::cout << "| i: " << i;
 	}
+	std::cout << "]" << endl;
 	vector<vector<int>> sub = utilities::subset(arg);
-	utilities::print_subsets(sub);*/
+	utilities::print_subsets(sub);
 
 	auto start_1 = chrono::high_resolution_clock::now();
 
@@ -327,11 +325,12 @@ int main(int argc, char** argv)
 	//Our decision variable Y[][] -> A Matrix
 	//		   env, numberOfRows
 	// y[i][m] client i livré par le drone m
-	NumVar2D Y(env, M);
+	NumVar2D Y(env, Nd.size());
 
-	for (int i = 1; i <= M; i++)
+	// WARNING, Y should be of size Nd_size
+	for (int i = 0; i < Nd.size(); i++)
 	{
-		Y[i] = IloNumVarArray(env, Nd_size, 0, IloInfinity, ILOBOOL);
+		Y[i] = IloNumVarArray(env, M, 0, IloInfinity, ILOBOOL);
 	}
 
 	// T: temps total
@@ -363,31 +362,36 @@ int main(int argc, char** argv)
 
 	// ct 3.8
 	// For each drone m
-	for (size_t m = 1; m <= M; m++)
+	for (size_t m = 0; m < M; m++)
 	{
 		IloExpr expr3_8(env);
-		// Sum on each i in Nd of t~[i] * y[i][m]
+		// Sum on each i in Nd of t^[i] * y[i][m]
 		for (size_t i : Nd)
 		{
-			expr3_8 += Drone_dist[i] * Y[i][m];
+			int index = std::distance(Nd.begin(), Nd.find(i));
+			expr3_8 += Drone_dist[i] * Y[index][m];
 		}
 		Model.add(T >= expr3_8);
 	}
 
 	// ct 3.9
 	// For each i in N
+	// EDITED: i in 0..n
+	// BIG BUG HERE
 	for (size_t i = 1; i <= n; i++)
 	{
 		// If i not in Nd
-		if (std::find(Nd.begin(), Nd.end(), i) == Nd.end())
+		if (Nd.find(i) == Nd.end())
 		{
+			std::cout << "ct3.9 -> Z[" << i - 1 << "] == 1" << endl;
 			// z[i] == 1
-			Model.add(Z[i] == 1);
+			Model.add(Z[i - 1] == 1);
 		}
 	}
 
 	// ct 3.10
 	// For each i in N
+	// EDITED: i in 0..n
 	for (size_t i = 1; i <= n; i++)
 	{
 		IloExpr expr3_10(env);
@@ -403,7 +407,7 @@ int main(int argc, char** argv)
 			}
 		}
 		// Strange stuff with the same variable named i
-		Model.add(expr3_10 == Z[i]);
+		Model.add(expr3_10 == Z[i - 1]);
 	}
 
 	// ct 3.11
@@ -412,11 +416,12 @@ int main(int argc, char** argv)
 	{
 		IloExpr expr3_11(env);
 		// Sum on each 1 <= m <= M
-		for (int m = 1; m <= M; m++)
+		for (int m = 0; m < M; m++)
 		{
-			expr3_11 += Y[i][m];
+			int index = std::distance(Nd.begin(), Nd.find(i));
+			expr3_11 += Y[index][m];
 		}
-		Model.add(expr3_11 == 1 - Z[i]);
+		Model.add(expr3_11 == 1 - Z[i - 1]);
 	}
 
 	// ct 3.12
@@ -456,29 +461,46 @@ int main(int argc, char** argv)
 			std::tie(k, temp) = a;
 			if (i == temp)
 			{
-				expr3_13_a += X[k][i];
+				expr3_13_b += X[k][i];
 			}
 		}
 		Model.add(expr3_13_a == expr3_13_b);
 	}
 
 	//SECs
-	/*for (int s = 0; s < sub.size(); s++)
+	// ct 3.14
+	// For each subset S of N
+	for (size_t s = 0; s < sub.size(); s++)
 	{
-		if (2 <= sub[s].size() && sub[s].size() <= n - 1)
+		vector<int> S = sub[s];
+		if (S.size() > 0 && S.size() != n)
 		{
-			//ct3_4
-			IloExpr expr3_4(env);
-			for (int i : sub[s])
+			// For each i in a subtour S
+			for (int i : S)
 			{
-				for (int j : sub[s])
+				IloExpr expr3_14(env);
+				// std::cout << "ct3.14 ->";
+				// For each j in S
+				for (int j : S)
 				{
-					expr3_4 += X[i][j];
+					// For each k not in S
+					// == For each k in N not in S
+					// EDITED: k in 0..n
+					for (int k = 1; k <= n; k++)
+					{
+						// If k not in S
+						if (std::find(S.begin(), S.end(), k) == S.end())
+						{
+							expr3_14 += X[j][k];
+							// std::cout << "+ X[" << j << "][" << k << "]";
+						}
+					}
 				}
+				// std::cout << ">= Z[" << i - 1 << "]" << std::endl;
+				Model.add(expr3_14 >= Z[i - 1]);
 			}
-			Model.add(expr3_4 <= int(sub[s].size() - 1));
 		}
-	}*/
+	}
 
 	/* =========
 	INTEGRALITY CONSTRAINTS
@@ -486,9 +508,10 @@ int main(int argc, char** argv)
 
 	// ct 3.15
 	// For each i in N
+	// EDITED: i in 0..n
 	for (size_t i = 1; i <= n; i++)
 	{
-		Model.add(Z[i] == 0 || Z[i] == 1);
+		Model.add(Z[i - 1] == 0 || Z[i - 1] == 1);
 	}
 
 	// ct 3.16
@@ -505,9 +528,10 @@ int main(int argc, char** argv)
 	for (int i : Nd)
 	{
 		// For each 1 <= m <= M
-		for (int m = 1; m <= M; m++)
+		for (int m = 0; m < M; m++)
 		{
-			Model.add(Y[i][m] == 0 || Y[i][m] == 1);
+			int index = std::distance(Nd.begin(), Nd.find(i));
+			Model.add(Y[index][m] == 0 || Y[index][m] == 1);
 		}
 	}
 
@@ -519,6 +543,7 @@ int main(int argc, char** argv)
 
 #pragma region Solving
 
+	std::cout << "Welcome to c++" << std::endl;
 	// Solving
 	IloCplex cplex(Model);
 	// Export the model, useful for debugging
@@ -542,7 +567,7 @@ int main(int argc, char** argv)
 	cplex.setParam(IloCplex::Param::MIP::Strategy::Search, IloCplex::Traditional);
 
 	//Registering callbacks
-	cplex.use(LazyCallback(env, Y, n));
+	//cplex.use(LazyCallback(env, Y, n));
 	bool solved = false;
 
 	try
@@ -581,18 +606,34 @@ int main(int argc, char** argv)
 		//Solving output
 		map<int, int> G;
 		cout << "Solution (" << cplex.getStatus() << ") with objective " << objective << endl;
-		for (int i = 0; i < n; i++)
+		cout << "Clients delivered using a truck Z[i] == 1 || drone Z[i] == 0:" << endl;
+		for (int i = 1; i <= n; i++)
 		{
-			for (int j = 0; j < n; j++)
+			float value = cplex.getValue(Z[i - 1]);
+			std::cout << "Z[" << i << "]=" << value << std::endl;
+		}
+		for (int i = 0; i <= n; i++)
+		{
+			for (int j = 0; j <= n; j++)
 			{
-				float value = cplex.getValue(Y[i][j]);
-				if (value == 1)
+				if (j == i) continue;
+				try
 				{
-					cout << i << "->" << j << endl;
-					G[i] = j;
+					float value = cplex.getValue(X[i][j]);
+					if (value == 1)
+					{
+						cout << i << "->" << j << endl;
+						G[i] = j;
+					}
+				}
+				catch (exception e)
+				{
+					std::cout << "Error at (i, j): (" << i << ", " << j << ")" << std::endl;
+					std::cout << "Catched an error while trying to reach the solution" << std::endl;
 				}
 			}
 		}
+		/*
 		ofstream file;
 		file.open("Results.txt", std::ios::app);
 		if (file.is_open())
@@ -612,7 +653,7 @@ int main(int argc, char** argv)
 				i = G[i];
 				file << " → " << i;
 			}
-		}
+		}*/
 	}
 	else
 	{
