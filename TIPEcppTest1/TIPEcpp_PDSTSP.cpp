@@ -112,7 +112,7 @@ vector<vector<int>> CalculateSubtours(map<int, int> G1)
 // CPLEX finds. For each location j it checks whether constraint
 //    sum(c in C) supply[c][j] <= (|C| - 1) * used[j]
 // is satisfied. If not then it adds the violated constraint as lazy constraint.
-ILOLAZYCONSTRAINTCALLBACK2(LazyCallback, NumVar2D, Xmatrix, IloInt, n)
+ILOLAZYCONSTRAINTCALLBACK3(LazyCallback, NumVar2D, Xmatrix, IloInt, n, IloNumVarArray, Zmatrix)
 {
 	auto start_lazy = chrono::high_resolution_clock::now();
 	map<int, int> G1;
@@ -122,11 +122,11 @@ ILOLAZYCONSTRAINTCALLBACK2(LazyCallback, NumVar2D, Xmatrix, IloInt, n)
 	{
 		for (int j = 0; j < n; j++)
 		{
-			const auto x_value = getValue(Xmatrix[i][j]);
+			if (i == j) continue;
+			cout << i << "->" << j << endl;
 			float value = getValue(Xmatrix[i][j]);
 			if (value == 1)
 			{
-				cout << i << "->" << j << endl;
 				//We assume that the path is unique (should be since it respects go-to and come-from constraints)
 				G1[i] = j;
 			}
@@ -136,6 +136,49 @@ ILOLAZYCONSTRAINTCALLBACK2(LazyCallback, NumVar2D, Xmatrix, IloInt, n)
 	vector<vector<int>> subToursList = CalculateSubtours(G1);
 	cout << "Subtours calculation done!" << endl;
 	// Here we go through each subtour to verify if it breaks the SECs
+	// ct 3.14
+	// For each subset S of N
+	for (vector<int> sub : subToursList)
+	{
+		if (sub.size() > 0 && sub.size() != n)
+		{
+			// For each i in a subtour S
+			for (int i : sub)
+			{
+				IloExpr expr3_14(getEnv());
+				float sum = 0;
+				// std::cout << "ct3.14 ->";
+				// For each j in S
+				for (int j : sub)
+				{
+					// For each k not in S
+					// == For each k in N not in S
+					// EDITED: k in 0..n
+					for (int k = 1; k <= n; k++)
+					{
+						// If k not in S
+						if (std::find(sub.begin(), sub.end(), k) == sub.end())
+						{
+							expr3_14 += Xmatrix[j][k];
+							sum += getValue(Xmatrix[j][k]);
+							// std::cout << "+ X[" << j << "][" << k << "]";
+						}
+					}
+				}
+				// std::cout << ">= Z[" << i - 1 << "]" << std::endl;
+				if (sum >= getValue(Zmatrix[i - 1]))
+				{
+					cout << "One subset is correct" << endl;
+				}
+				else
+				{
+					cout << "Adding lazy, SEC constraint " << sum << " <= " << int(getValue(Zmatrix[i - 1])) << " is violated" << endl;
+					add(expr3_14 >= Zmatrix[i - 1]);
+				}
+			}
+		}
+	}
+	/*
 	for (vector<int> sub : subToursList)
 	{
 		if (2 <= sub.size() && sub.size() <= n - 1)
@@ -169,7 +212,7 @@ ILOLAZYCONSTRAINTCALLBACK2(LazyCallback, NumVar2D, Xmatrix, IloInt, n)
 				add(expr3_4 <= int(sub.size() - 1));
 			}
 		}
-	}
+	}*/
 	auto end_lazy = chrono::high_resolution_clock::now();
 	auto ElapsedLazy = chrono::duration_cast<chrono::milliseconds>(end_lazy - start_lazy);
 
@@ -275,6 +318,7 @@ int main(int argc, char** argv)
 	Drone_dist = FileManager::read_standardized_csv_drones(func_out_2, useTime, true);
 
 	// Subtours generation
+	/*
 	vector<int> arg;
 	std::cout << "[";
 	for (int i = 1; i <= n; i++)
@@ -285,7 +329,7 @@ int main(int argc, char** argv)
 	std::cout << "]" << endl;
 	vector<vector<int>> sub = utilities::subset(arg);
 	utilities::print_subsets(sub);
-
+	*/
 	auto start_1 = chrono::high_resolution_clock::now();
 
 #pragma endregion
@@ -418,7 +462,7 @@ int main(int argc, char** argv)
 		// Sum on each 1 <= m <= M
 		for (int m = 0; m < M; m++)
 		{
-			int index = std::distance(Nd.begin(), Nd.find(i));
+			size_t index = std::distance(Nd.begin(), Nd.find(i));
 			expr3_11 += Y[index][m];
 		}
 		Model.add(expr3_11 == 1 - Z[i - 1]);
@@ -470,6 +514,7 @@ int main(int argc, char** argv)
 	//SECs
 	// ct 3.14
 	// For each subset S of N
+	/*
 	for (size_t s = 0; s < sub.size(); s++)
 	{
 		vector<int> S = sub[s];
@@ -500,7 +545,7 @@ int main(int argc, char** argv)
 				Model.add(expr3_14 >= Z[i - 1]);
 			}
 		}
-	}
+	}*/
 
 	/* =========
 	INTEGRALITY CONSTRAINTS
@@ -530,7 +575,7 @@ int main(int argc, char** argv)
 		// For each 1 <= m <= M
 		for (int m = 0; m < M; m++)
 		{
-			int index = std::distance(Nd.begin(), Nd.find(i));
+			size_t index = std::distance(Nd.begin(), Nd.find(i));
 			Model.add(Y[index][m] == 0 || Y[index][m] == 1);
 		}
 	}
@@ -567,7 +612,7 @@ int main(int argc, char** argv)
 	cplex.setParam(IloCplex::Param::MIP::Strategy::Search, IloCplex::Traditional);
 
 	//Registering callbacks
-	//cplex.use(LazyCallback(env, Y, n));
+	cplex.use(LazyCallback(env, Y, n, Z));
 	bool solved = false;
 
 	try
@@ -633,7 +678,7 @@ int main(int argc, char** argv)
 				}
 			}
 		}
-		/*
+
 		ofstream file;
 		file.open("Results.txt", std::ios::app);
 		if (file.is_open())
@@ -645,15 +690,55 @@ int main(int argc, char** argv)
 			file << "|\tSetup elapsed time(ms): " << ElapsedSetup.count() << endl;
 			file << "|\tSolving elapsed time(ms): " << ElapsedSolving.count() << endl;
 			file << "Solution (" << cplex.getStatus() << ") with objective " << objective << endl;
-			int i = 0;
-			file << i << " → " << G[i];
+		}
+		file.close();
+		// Save X file
+		ofstream file_X;
+		file_X.open("Results_X.csv", std::ios::out);
+		if (file_X.is_open())
+		{
+			int i = 1;
+			file_X << i << "," << G[i];
 			i = G[i];
-			while (i != 0)
+			while (i != 1)
 			{
 				i = G[i];
-				file << " → " << i;
+				file_X << "," << i;
 			}
-		}*/
+		}
+		file_X.close();
+		// Save Y file
+		ofstream file_Y;
+		file_Y.open("Results_Y.csv", std::ios::out);
+		if (file_Y.is_open())
+		{
+			file_Y << "i, Y[i][m]" << endl;
+			for (size_t i : Nd)
+			{
+				file_Y << i;
+				for (int m = 0; m < M; m++)
+				{
+					size_t index = std::distance(Nd.begin(), Nd.find(i));
+					int value = cplex.getValue(Y[index][m]);
+					file_Y << "," << value;
+				}
+				file_Y << endl;
+			}
+		}
+		file_Y.close();
+		// Save Z file
+		ofstream file_Z;
+		file_Z.open("Results_Z.csv", std::ios::out);
+		if (file_Z.is_open())
+		{
+			file_Z << "i, Z[i]" << endl;
+			for (size_t i = 1; i <= n; i++)
+			{
+				int value = cplex.getValue(Z[i - 1]);
+				file_Z << i << "," << value << endl;
+			}
+		}
+		file_Z.close();
 	}
 	else
 	{

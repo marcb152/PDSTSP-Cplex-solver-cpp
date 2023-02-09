@@ -364,3 +364,4 @@ FodyWeavers.xsd
 /TIPEcppTest1/model.lp
 /TIPEcppTest1/Model.lp
 /TIPEcppTest1/Results.txt
+*.csv
