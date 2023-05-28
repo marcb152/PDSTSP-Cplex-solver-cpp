@@ -95,3 +95,25 @@ float* FileManager::read_standardized_csv_drones(vector<vector<string>> lines, b
 	}
 	return Distance;
 }
+
+std::set<int> FileManager::get_drone_clients_csv(vector<vector<string>> lines, bool EnableCout)
+{
+	// Conditions to be drone-eligible: distance < 8000 && weight < 5kg
+	std::set<int> data = {};
+	//We ignore two first lines
+	for (int p = 2; p < lines.size(); p++)
+	{
+		int i = std::stoi(lines[p][0]);
+		float weight = std::stof(lines[p][5]);
+		float distance = std::stof(lines[p][7]);
+		if (weight < 5.0 && distance < 8000.0)
+		{
+			data.insert(data.end(), i);
+			if (EnableCout)
+			{
+				cout << "Nd_i: " << i << endl;
+			}
+		}
+	}
+	return data;
+}
